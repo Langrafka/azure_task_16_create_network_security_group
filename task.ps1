@@ -14,17 +14,88 @@ $mngSubnetIpRange = "10.20.30.128/26"
 Write-Host "Creating a resource group $resourceGroupName ..."
 New-AzResourceGroup -Name $resourceGroupName -Location $location
 
+# ----------------------------------------------------------------------
+# 1. Створення NSG для webservers (HTTP/HTTPS з Internet)
+# Вимога: webservers subnet should accept only HTTP and HTTPS traffic from the Internet
+# ----------------------------------------------------------------------
 Write-Host "Creating web network security group..."
-# Write your code for creation of Web NSG here -> 
 
+# Правило: Дозволити TCP 80 та 443 з Інтернету. Використовуємо Service Tag 'Internet'.
+$webRules = @(
+    New-AzNetworkSecurityRuleConfig -Name "Allow-HTTP-HTTPS-Internet" `
+        -Priority 100 `
+        -Direction Inbound `
+        -Access Allow `
+        -Protocol Tcp `
+        -SourceAddressPrefix Internet `
+        -SourcePortRange "*" `
+        -DestinationAddressPrefix "*" `
+        -DestinationPortRange @("80", "443")
+)
+
+$webserversNSG = New-AzNetworkSecurityGroup -Name $webSubnetName `
+    -ResourceGroupName $resourceGroupName `
+    -Location $location `
+    -SecurityRules $webRules
+
+
+# ----------------------------------------------------------------------
+# 2. Створення NSG для management (SSH з Internet)
+# Вимога: management subnet should accept only SSH traffic from the Internet
+# ----------------------------------------------------------------------
 Write-Host "Creating mngSubnet network security group..."
-# Write your code for creation of management NSG here -> 
 
+# Правило: Дозволити TCP 22 (SSH) з Інтернету. Використовуємо Service Tag 'Internet'.
+$mngRules = @(
+    New-AzNetworkSecurityRuleConfig -Name "Allow-SSH-Internet" `
+        -Priority 100 `
+        -Direction Inbound `
+        -Access Allow `
+        -Protocol Tcp `
+        -SourceAddressPrefix Internet `
+        -SourcePortRange "*" `
+        -DestinationAddressPrefix "*" `
+        -DestinationPortRange "22"
+)
+
+$managementNSG = New-AzNetworkSecurityGroup -Name $mngSubnetName `
+    -ResourceGroupName $resourceGroupName `
+    -Location $location `
+    -SecurityRules $mngRules
+
+
+# ----------------------------------------------------------------------
+# 3. Створення NSG для database (Блокування трафіку з Internet)
+# Вимога: database subnet should not accept any traffic from the Internet at all.
+# ----------------------------------------------------------------------
 Write-Host "Creating dbSubnet network security group..."
-# Write your code for creation of management NSG here -> 
+# Для database NSG не потрібно додавати явних правил Deny, оскільки це забезпечується
+# правилом NSG за замовчуванням 'DenyAllInbound' (пріоритет 65500).
+# Достатньо створити NSG без користувацьких правил Inbound.
 
+$databaseNSG = New-AzNetworkSecurityGroup -Name $dbSubnetName `
+    -ResourceGroupName $resourceGroupName `
+    -Location $location `
+    -SecurityRules @()
+
+
+# ----------------------------------------------------------------------
+# 4. Створення Virtual Network та приєднання NSG до підмереж
+# ----------------------------------------------------------------------
 Write-Host "Creating a virtual network ..."
-$webSubnet = New-AzVirtualNetworkSubnetConfig -Name $webSubnetName -AddressPrefix $webSubnetIpRange
-$dbSubnet = New-AzVirtualNetworkSubnetConfig -Name $dbSubnetName -AddressPrefix $dbSubnetIpRange
-$mngSubnet = New-AzVirtualNetworkSubnetConfig -Name $mngSubnetName -AddressPrefix $mngSubnetIpRange
+
+# Приєднання NSG до конфігурації підмереж за допомогою параметра -NetworkSecurityGroup
+$webSubnet = New-AzVirtualNetworkSubnetConfig -Name $webSubnetName `
+    -AddressPrefix $webSubnetIpRange `
+    -NetworkSecurityGroup $webserversNSG
+
+$dbSubnet = New-AzVirtualNetworkSubnetConfig -Name $dbSubnetName `
+    -AddressPrefix $dbSubnetIpRange `
+    -NetworkSecurityGroup $databaseNSG
+
+$mngSubnet = New-AzVirtualNetworkSubnetConfig -Name $mngSubnetName `
+    -AddressPrefix $mngSubnetIpRange `
+    -NetworkSecurityGroup $managementNSG
+
+# Створення VNet з оновленими підмережами
 New-AzVirtualNetwork -Name $virtualNetworkName -ResourceGroupName $resourceGroupName -Location $location -AddressPrefix $vnetAddressPrefix -Subnet $webSubnet,$dbSubnet,$mngSubnet
