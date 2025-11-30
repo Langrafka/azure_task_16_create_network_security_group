@@ -14,24 +14,35 @@ $mngSubnetIpRange = "10.20.30.128/26"
 Write-Host "Creating a resource group $resourceGroupName ..."
 New-AzResourceGroup -Name $resourceGroupName -Location $location
 
+# --- Внутрішнє правило для всіх NSG (Вимога ментора) ---
+$vnetInboundRule = New-AzNetworkSecurityRuleConfig -Name "Allow-VNet-Inbound" `
+    -Priority 110 `
+    -Direction Inbound `
+    -Access Allow `
+    -Protocol "*" `
+    -SourceAddressPrefix VirtualNetwork `
+    -SourcePortRange "*" `
+    -DestinationAddressPrefix "*" `
+    -DestinationPortRange "*"
+
 # ----------------------------------------------------------------------
-# 1. Створення NSG для webservers (HTTP/HTTPS з Internet)
-# Вимога: webservers subnet should accept only HTTP and HTTPS traffic from the Internet
+# 1. Створення NSG для webservers (HTTP/HTTPS з Internet + VNet)
 # ----------------------------------------------------------------------
 Write-Host "Creating web network security group..."
 
-# Правило: Дозволити TCP 80 та 443 з Інтернету. Використовуємо Service Tag 'Internet'.
-$webRules = @(
-    New-AzNetworkSecurityRuleConfig -Name "Allow-HTTP-HTTPS-Internet" `
-        -Priority 100 `
-        -Direction Inbound `
-        -Access Allow `
-        -Protocol Tcp `
-        -SourceAddressPrefix Internet `
-        -SourcePortRange "*" `
-        -DestinationAddressPrefix "*" `
-        -DestinationPortRange @("80", "443")
-)
+# Правило: Дозволити TCP 80 та 443 з Інтернету (Priority 100)
+$internetWebRule = New-AzNetworkSecurityRuleConfig -Name "Allow-HTTP-HTTPS-Internet" `
+    -Priority 100 `
+    -Direction Inbound `
+    -Access Allow `
+    -Protocol Tcp `
+    -SourceAddressPrefix Internet `
+    -SourcePortRange "*" `
+    -DestinationAddressPrefix "*" `
+    -DestinationPortRange @("80", "443")
+
+# Об'єднуємо правила: Інтернет + Явне VNet правило
+$webRules = @($internetWebRule, $vnetInboundRule)
 
 $webserversNSG = New-AzNetworkSecurityGroup -Name $webSubnetName `
     -ResourceGroupName $resourceGroupName `
@@ -40,23 +51,23 @@ $webserversNSG = New-AzNetworkSecurityGroup -Name $webSubnetName `
 
 
 # ----------------------------------------------------------------------
-# 2. Створення NSG для management (SSH з Internet)
-# Вимога: management subnet should accept only SSH traffic from the Internet
+# 2. Створення NSG для management (SSH з Internet + VNet)
 # ----------------------------------------------------------------------
 Write-Host "Creating mngSubnet network security group..."
 
-# Правило: Дозволити TCP 22 (SSH) з Інтернету. Використовуємо Service Tag 'Internet'.
-$mngRules = @(
-    New-AzNetworkSecurityRuleConfig -Name "Allow-SSH-Internet" `
-        -Priority 100 `
-        -Direction Inbound `
-        -Access Allow `
-        -Protocol Tcp `
-        -SourceAddressPrefix Internet `
-        -SourcePortRange "*" `
-        -DestinationAddressPrefix "*" `
-        -DestinationPortRange "22"
-)
+# Правило: Дозволити TCP 22 (SSH) з Інтернету (Priority 100)
+$internetMngRule = New-AzNetworkSecurityRuleConfig -Name "Allow-SSH-Internet" `
+    -Priority 100 `
+    -Direction Inbound `
+    -Access Allow `
+    -Protocol Tcp `
+    -SourceAddressPrefix Internet `
+    -SourcePortRange "*" `
+    -DestinationAddressPrefix "*" `
+    -DestinationPortRange "22"
+
+# Об'єднуємо правила: Інтернет + Явне VNet правило
+$mngRules = @($internetMngRule, $vnetInboundRule)
 
 $managementNSG = New-AzNetworkSecurityGroup -Name $mngSubnetName `
     -ResourceGroupName $resourceGroupName `
@@ -65,18 +76,14 @@ $managementNSG = New-AzNetworkSecurityGroup -Name $mngSubnetName `
 
 
 # ----------------------------------------------------------------------
-# 3. Створення NSG для database (Блокування трафіку з Internet)
-# Вимога: database subnet should not accept any traffic from the Internet at all.
+# 3. Створення NSG для database (Тільки VNet)
 # ----------------------------------------------------------------------
 Write-Host "Creating dbSubnet network security group..."
-# Для database NSG не потрібно додавати явних правил Deny, оскільки це забезпечується
-# правилом NSG за замовчуванням 'DenyAllInbound' (пріоритет 65500).
-# Достатньо створити NSG без користувацьких правил Inbound.
 
 $databaseNSG = New-AzNetworkSecurityGroup -Name $dbSubnetName `
     -ResourceGroupName $resourceGroupName `
     -Location $location `
-    -SecurityRules @()
+    -SecurityRules @($vnetInboundRule)
 
 
 # ----------------------------------------------------------------------
